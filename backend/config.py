@@ -24,9 +24,17 @@ class Settings(BaseModel):
     api_port: int = Field(default=8000, ge=1, le=65535)
     api_prefix: str = Field(default="", description="URL prefix for API routes")
 
-    # Gemini (optional; core logic works without it)
+    # LLM provider: "ollama" (local, free) or "gemini" (cloud)
+    llm_provider: str = Field(default="ollama", description="LLM backend: 'ollama' or 'gemini'")
+
+    # Ollama (local — no API key needed)
+    ollama_base_url: str = Field(default="http://localhost:11434", description="Ollama API base URL")
+    ollama_model: str = Field(default="llama3.2", description="Ollama model tag")
+    ollama_timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
+
+    # Gemini (optional fallback; core logic works without it)
     gemini_api_key: Optional[str] = Field(default=None, description="Google Gemini API key")
-    gemini_model: str = Field(default="gemini-2.0-flash", description="Gemini model name (e.g. gemini-2.0-flash, gemini-1.5-flash)")
+    gemini_model: str = Field(default="gemini-2.0-flash", description="Gemini model name")
     gemini_timeout_seconds: float = Field(default=15.0, ge=1.0, le=60.0)
 
     # Battery / simulation defaults
@@ -45,6 +53,10 @@ class Settings(BaseModel):
             api_host=os.getenv("API_HOST", "0.0.0.0"),
             api_port=int(os.getenv("API_PORT", "8000")),
             api_prefix=os.getenv("API_PREFIX", "").strip(),
+            llm_provider=os.getenv("LLM_PROVIDER", "ollama").strip().lower(),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip(),
+            ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2").strip(),
+            ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT", "30")),
             gemini_api_key=(os.getenv("GEMINI_API_KEY") or "").strip().strip('"').strip("'") or None,
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             gemini_timeout_seconds=float(os.getenv("GEMINI_TIMEOUT", "15")),
@@ -56,7 +68,9 @@ class Settings(BaseModel):
 
     @property
     def has_llm(self) -> bool:
-        """True if Gemini API key is set and LLM layer can be used."""
+        """True if any LLM provider is usable."""
+        if self.llm_provider == "ollama":
+            return True  # Ollama is always assumed available if configured
         return bool(self.gemini_api_key and self.gemini_api_key.strip())
 
 

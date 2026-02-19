@@ -2,6 +2,7 @@
 BattWise AI FastAPI application.
 Exposes /simulate, /status, /plan, POST /chat with structured JSON.
 """
+import threading
 from typing import List, Optional, Set
 
 from fastapi import FastAPI, Query
@@ -75,6 +76,28 @@ def create_app() -> FastAPI:
     stress_engine = StressEngine()
     planning_engine = PlanningEngine()
     llm_service = LLMService()
+
+    @app.on_event("startup")
+    async def _warmup_llm():
+        """Pre-load the Ollama model in a background thread so the first
+        user chat message is fast instead of waiting for a cold start."""
+        def _ping():
+            try:
+                import requests as _r
+                _r.post(
+                    f"{settings.ollama_base_url}/api/generate",
+                    json={
+                        "model":      settings.ollama_model,
+                        "prompt":     "hi",
+                        "stream":     False,
+                        "keep_alive": 600,
+                        "options":    {"num_predict": 1},
+                    },
+                    timeout=40,
+                )
+            except Exception:
+                pass  # Ollama not running — silently skip
+        threading.Thread(target=_ping, daemon=True).start()
 
     @app.get("/simulate", response_model=SimulateResponse)
     def simulate(
