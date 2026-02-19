@@ -1,0 +1,10 @@
+# BattWise AI – Dark Glassmorphism Theme
+[theme]
+primaryColor             = "#39ff9f"
+backgroundColor          = "#050d1a"
+secondaryBackgroundColor = "#0a1628"
+textColor                = "#e2f0ff"
+font                     = "sans serif"
+
+[server]
+headless = true

@@ -63,15 +63,66 @@ class LLMService:
         context: Dict[str, Any],
         user_message: Optional[str] = None,
     ) -> str:
-        """Send context + user message to LLM; always returns a safe string."""
+        """Non-streaming wrapper for backward compatibility."""
         prompt = self._build_prompt(context, user_message)
-
         if self._provider == "ollama":
             return self._explain_ollama(prompt)
         elif self._provider == "gemini":
             return self._explain_gemini(prompt)
+        return f"Unknown LLM_PROVIDER '{self._provider}'"
+
+    def stream_explain(self, context: Dict[str, Any], user_message: str):
+        """
+        Generator that yields text tokens from the LLM.
+        """
+        prompt = self._build_prompt(context, user_message)
+        if self._provider == "ollama":
+            yield from self._stream_ollama(prompt)
         else:
-            return f"Unknown LLM_PROVIDER '{self._provider}'. Set to 'ollama' or 'gemini' in .env."
+            yield from self._stream_gemini(prompt)
+
+    def _stream_ollama(self, prompt: str):
+        """Stream from local Ollama API."""
+        try:
+            r = _requests.post(
+                f"{self._ollama_url}/api/generate",
+                json={
+                    "model":  self._ollama_model,
+                    "prompt": prompt,
+                    "stream": True,
+                    "options": {
+                        "temperature": 0.2,
+                        "num_predict": 100,
+                        "num_ctx":     512,
+                    }
+                },
+                stream=True,
+                timeout=40
+            )
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if line:
+                    chunk = json.loads(line)
+                    token = chunk.get("response", "")
+                    if token:
+                        yield token
+                    if chunk.get("done"):
+                        break
+        except Exception as e:
+            yield f"⚠️ Ollama stream error: {str(e)}"
+
+    def _stream_gemini(self, prompt: str):
+        """Stream from cloud Gemini API."""
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=self._gemini_key)
+            model = genai.GenerativeModel(self._gemini_model)
+            response = model.generate_content(prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"⚠️ Gemini stream error: {str(e)}"
 
     # ── Ollama path ──────────────────────────────────────────────────────────
 
@@ -87,10 +138,10 @@ class LLMService:
                         "stream":     False,
                         "keep_alive": 600,   # keep model hot in RAM for 10 min
                         "options": {
-                            "temperature": 0.3,
-                            "num_predict": 150,   # shorter replies = faster
-                            "num_ctx":     512,   # smaller context window = faster
-                            "stop":        ["\n\n\n"],
+                            "temperature": 0.2,
+                            "num_predict": 80,    # short replies = fast
+                            "num_ctx":     256,   # smallest context = fast
+                            "stop":        ["\n\n"],
                         },
                     },
                     timeout=self._ollama_timeout,
@@ -283,23 +334,12 @@ class LLMService:
         clean = message.strip().lower()
         return any(kw in clean for kw in self._SOLAR_KEYWORDS)
 
-    # ── Master system persona ────────────────────────────────────────────────
+    # ── Master system persona (kept short for speed on CPU) ────────────────
     _SYSTEM_PERSONA = (
-        "You are BattWise AI, a friendly and knowledgeable expert on:\n"
-        "  • LiFePO4 and all types of solar batteries (chemistry, cycles, BMS, aging)\n"
-        "  • Solar PV systems (panels, inverters, MPPT/PWM controllers, wiring, sizing)\n"
-        "  • Off-grid, hybrid, and grid-tie solar setups\n"
-        "  • Energy management (load planning, peak/off-peak, net metering)\n"
-        "  • Battery health monitoring, stress analysis, and maintenance\n"
-        "  • Troubleshooting common solar + battery issues\n"
-        "  • Costs, ROI, subsidies, and installation best practices\n\n"
-        "Rules:\n"
-        "  - Answer in 2-4 concise sentences. Be specific and actionable.\n"
-        "  - If you don't have exact data, give a helpful general answer based on your expertise.\n"
-        "  - Never say 'I don't know' — always provide something useful and relevant.\n"
-        "  - If the question is completely unrelated to solar/batteries, politely say you specialise "
-        "in solar and battery systems and redirect them to ask about that.\n"
-        "  - Reply ONLY with the explanation — no code, no JSON, no bullet formatting.\n"
+        "You are BattWise AI, a solar+battery expert. "
+        "Answer in 2-3 sentences. Be specific. "
+        "Topics: LiFePO4, solar panels, inverters, MPPT, BMS, charging, off-grid, maintenance, costs, energy planning. "
+        "If off-topic, politely redirect to solar/battery. No lists, no JSON."
     )
 
     def _build_prompt(self, context: Dict[str, Any], user_message: Optional[str]) -> str:
@@ -309,10 +349,8 @@ class LLMService:
         # 1. Casual greeting / small talk
         if self._is_casual(msg):
             return (
-                "You are BattWise AI, a warm and helpful assistant for solar + battery users.\n"
-                "Reply warmly in 1-2 sentences. If the user greets you, introduce yourself and "
-                "mention you can help with battery health, solar panels, energy plans, charging, "
-                "inverters, maintenance, costs, and more.\n\n"
+                f"You are BattWise AI, a solar+battery assistant. "
+                f"Reply warmly in 1 sentence, mention you help with battery health, solar, energy plans.\n"
                 f"User: {msg}\nBattWise AI:"
             )
 

@@ -18,7 +18,7 @@ CUSTOM_CSS = """
 
 /* ── Reset & base ───────────────────────────────────────────────────── */
 *, *::before, *::after {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   box-sizing: border-box;
 }
 
@@ -74,7 +74,7 @@ CUSTOM_CSS = """
 .main .block-container {
   padding-top: 1.75rem !important;
   padding-bottom: 3rem !important;
-  max-width: 1440px !important;
+  max-width: 90% !important; /* Made responsive */
 }
 
 /* ── Glass mixin (applied to every card component) ──────────────────── */
@@ -203,6 +203,18 @@ CUSTOM_CSS = """
 .metric-card .mc-value.safe    { color: var(--safe);     text-shadow: var(--safe-glow); }
 .metric-card .mc-value.warn    { color: var(--warning);  text-shadow: var(--warning-glow); }
 .metric-card .mc-value.danger  { color: var(--critical); text-shadow: var(--critical-glow); }
+
+/* ── Mobile Tweaks ──────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .main .block-container {
+    max-width: 100% !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+  .metric-card .mc-value { font-size: 1.6rem; }
+  .dash-header { padding: 1rem 1.25rem; }
+  .dash-header h1 { font-size: 1.5rem !important; }
+}
 
 /* ── Progress bar ───────────────────────────────────────────────────── */
 @keyframes fillBar { from { width: 0%; } }
@@ -537,6 +549,23 @@ def api_chat(message: str, context: Any = None) -> Optional[Dict]:
         return api_post("/chat", {"message": message, "context": context}, timeout=60)
 
 
+def api_chat_stream(message: str, context: Any = None):
+    """Generator for streaming chat responses."""
+    try:
+        r = requests.post(
+            f"{BACKEND_URL}/chat/stream",
+            json={"message": message, "context": context},
+            stream=True,
+            timeout=40
+        )
+        r.raise_for_status()
+        for chunk in r.iter_content(chunk_size=None, decode_unicode=True):
+            if chunk:
+                yield chunk
+    except Exception as e:
+        yield f"⚠️ Stream error: {e}"
+
+
 # ─── Plotly dark theme helper ───────────────────────────────────────────────
 def dark_layout(height: int = 320, **kwargs) -> dict:
     return dict(
@@ -602,8 +631,10 @@ def main() -> None:
             data = api_get("/simulate", params)
             if data:
                 st.session_state["simulate"] = data
-                st.session_state["status"] = None
-                st.session_state["plan"] = None
+                # Immediately re-fetch status + plan so metric cards
+                # reflect the NEW simulation (not cached stale values)
+                st.session_state["status"] = api_get("/status")
+                st.session_state["plan"]   = api_get("/plan")
                 st.success("✅ Simulation complete.")
 
     # ── Seed data ─────────────────────────────────────────────────────────
@@ -812,18 +843,23 @@ def main() -> None:
     st.markdown('<span class="section-title">💬  AI Chat Assistant</span>', unsafe_allow_html=True)
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
+    
     for msg in st.session_state["chat_history"]:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
         if msg.get("caption"):
             st.caption(msg["caption"])
+
     user_msg = st.chat_input("Ask about your battery health, usage plan, or status…")
     if user_msg:
         st.session_state["chat_history"].append({"role": "user", "content": user_msg})
-        reply_data = api_chat(user_msg)
-        reply   = reply_data.get("reply", "No reply.") if reply_data else "Backend unavailable."
-        caption = reply_data.get("fallback_message") if reply_data else None
-        st.session_state["chat_history"].append({"role": "assistant", "content": reply, "caption": caption})
+        with st.chat_message("user"):
+            st.write(user_msg)
+            
+        with st.chat_message("assistant"):
+            # Use streaming
+            full_reply = st.write_stream(api_chat_stream(user_msg))
+            st.session_state["chat_history"].append({"role": "assistant", "content": full_reply})
         st.rerun()
 
 

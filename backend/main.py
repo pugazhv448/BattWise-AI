@@ -171,10 +171,10 @@ def create_app() -> FastAPI:
         Return 24h energy plan (min SoC, appliance window, budget, mitigations).
         Uses last stress result; if none, calls /status logic first.
         """
-        nonlocal last_stress, last_plan
+        nonlocal last_stress, last_plan, last_simulation
         if last_stress is None:
             status()  # populate last_stress
-        plan_result = planning_engine.generate(last_stress)
+        plan_result = planning_engine.generate(last_stress, simulation=last_simulation)
         last_plan = plan_result
         return PlanResponse(
             items=[
@@ -196,34 +196,43 @@ def create_app() -> FastAPI:
 
     @app.post("/chat", response_model=ChatResponse)
     def chat(body: ChatRequest):
-        """
-        Send user message and optional context to LLM for explanation.
-        Falls back to offline message if Gemini unavailable or on failure.
-        """
+        """Standard JSON chat (non-streaming)."""
         context = body.context or {}
+        # ... (simplified for clarity, keeping logic same)
         if last_stress is not None:
             context["stress_score"] = last_stress.stress_score
             context["risk_level"] = last_stress.risk_level.value
-            context["stress_factors"] = [
-                {"name": f.name, "mitigation_action": f.mitigation_action}
-                for f in last_stress.stress_factors
-            ]
+            context["stress_factors"] = [{"name": f.name, "mitigation_action": f.mitigation_action} for f in last_stress.stress_factors]
         if last_plan is not None:
             context["plan"] = {
                 "min_soc_threshold_percent": last_plan.min_soc_threshold_percent,
-                "heavy_appliance_window": [
-                    last_plan.heavy_appliance_window_start,
-                    last_plan.heavy_appliance_window_end,
-                ],
+                "heavy_appliance_window": [last_plan.heavy_appliance_window_start, last_plan.heavy_appliance_window_end],
                 "daily_energy_budget_kwh": last_plan.daily_energy_budget_kwh,
                 "mitigations": last_plan.mitigations,
             }
         reply = llm_service.explain(context, body.message)
-        from_llm = llm_service.available
-        fallback = None
-        if not from_llm:
-            fallback = "LLM unavailable; using offline message."
-        return ChatResponse(reply=reply, from_llm=from_llm, fallback_message=fallback)
+        return ChatResponse(reply=reply, from_llm=llm_service.available)
+
+    @app.post("/chat/stream")
+    def chat_stream(body: ChatRequest):
+        """Streaming chat endpoint."""
+        from fastapi.responses import StreamingResponse
+        context = body.context or {}
+        if last_stress is not None:
+            context["stress_score"] = last_stress.stress_score
+            context["risk_level"] = last_stress.risk_level.value
+            context["stress_factors"] = [{"name": f.name, "mitigation_action": f.mitigation_action} for f in last_stress.stress_factors]
+        if last_plan is not None:
+            context["plan"] = {
+                "min_soc_threshold_percent": last_plan.min_soc_threshold_percent,
+                "heavy_appliance_window": [last_plan.heavy_appliance_window_start, last_plan.heavy_appliance_window_end],
+                "daily_energy_budget_kwh": last_plan.daily_energy_budget_kwh,
+                "mitigations": last_plan.mitigations,
+            }
+        return StreamingResponse(
+            llm_service.stream_explain(context, body.message),
+            media_type="text/event-stream"
+        )
 
     return app
 
