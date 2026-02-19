@@ -11,6 +11,13 @@ __pycache__/
 dist/
 build/
 
+# Node / React
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
 # IDE
 .idea/
 .vscode/
@@ -18,4 +25,4 @@ build/
 *.swo
 
 # Streamlit
-.streamlit/secrets.toml
+.streamlit/
